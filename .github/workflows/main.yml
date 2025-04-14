@@ -1,53 +1,50 @@
-name: Update IP List
+import requests
+from bs4 import BeautifulSoup
+import re
+import os
 
-on:
-  workflow_dispatch:
-  push:
-    branches: [ gj7887-patch-3 ]  # 明确指定分支
-    paths:
-      - 'collect_ips.py'
+# 目标URL列表
+urls = [
+    'https://monitor.gacjie.cn/page/cloudflare/ipv4.html', 
+    'https://ip.164746.xyz'
+]
 
-jobs:
-  update-ip-list:
-    runs-on: ubuntu-latest
-    
-    steps:
-    - uses: actions/checkout@v3
-      with:
-        ref: gj7887-patch-3  # 明确检出这个分支
-    
-    - name: Verify files exist
-      run: |
-        ls -la
-        [ -f "collect_ips.py" ] || exit 1
-        [ -f "ip.txt" ] || touch ip.txt
+# 正则表达式用于匹配IP地址
+ip_pattern = r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'  # 添加了单词边界
+
+# 请求头
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+}
+
+# 使用集合存储IP，自动去重
+ip_set = set()
+
+for url in urls:
+    try:
+        # 发送HTTP请求获取网页内容
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()  # 检查请求是否成功
         
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.9.13'
+        # 使用BeautifulSoup解析HTML
+        soup = BeautifulSoup(response.text, 'html.parser')
         
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install requests beautifulsoup4
+        # 统一查找tr元素
+        elements = soup.find_all('tr')
         
-    - name: Run IP collection
-      run: python collect_ips.py
-        
-    - name: Commit and push
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        git config --global user.email "tianshideyou@proton.me"
-        git config --global user.name "tianshipapa"
-        
-        if [ -n "$(git status --porcelain)" ]; then
-          git add ip.txt
-          git commit -m "Update IPs $(date +'%F %T')"
-          
-          # 重试机制
-          for i in {1..3}; do
-            git pull --rebase && git push && break || sleep 5
-          done
-        fi
+        # 遍历所有元素,查找IP地址
+        for element in elements:
+            element_text = element.get_text()
+            ip_matches = re.findall(ip_pattern, element_text)
+            ip_set.update(ip_matches)  # 添加到集合中
+            
+    except requests.exceptions.RequestException as e:
+        print(f"请求 {url} 时出错: {e}")
+        continue
+
+# 写入文件
+with open('ip.txt', 'w') as file:
+    for ip in sorted(ip_set):  # 排序后写入
+        file.write(ip + '\n')
+
+print(f'找到 {len(ip_set)} 个唯一IP地址，已保存到ip.txt文件中。')
